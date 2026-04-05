@@ -141,7 +141,7 @@ That makes it useful not only as a demoable product, but as a foundation for a m
 
 The deployed app is available here:
 
-**[https://traxr-ai.streamlit.app/](https://traxr-ai.streamlit.app)**
+**[https://traxr-ai.streamlit.app](https://traxr-ai.streamlit.app/)**
 
 ---
 
