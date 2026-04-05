@@ -149,7 +149,7 @@ The deployed app is available here:
 
 **TRAXR** stands for:
 
-**Track · Analyze · eXecute**
+**Track · Analyze · eXecute — Resume**
 
 It reflects the product’s core flow: identify the mismatch, analyze the evidence, and execute on improvement.
 
