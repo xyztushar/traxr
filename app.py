@@ -358,6 +358,77 @@ div[data-testid="stFileUploader"]:hover{border-color:var(--acc)}
   transition:all .3s ease}
 .demo-gen-sm:hover{transform:translateY(-2px);
   box-shadow:0 5px 20px rgba(99,102,241,.15),0 2px 10px rgba(167,139,250,.1)}
+
+/* ── Input Command Center — premium banner ── */
+@keyframes inputBorderGlow{
+  0%,100%{border-color:rgba(99,102,241,.15);box-shadow:0 0 20px rgba(99,102,241,.03)}
+  50%{border-color:rgba(129,140,248,.28);box-shadow:0 0 28px rgba(99,102,241,.06)}
+}
+@keyframes inputOrbPulse{
+  0%,100%{transform:scale(1);opacity:.9}
+  50%{transform:scale(1.12);opacity:1}
+}
+.input-banner{position:relative;overflow:hidden;border-radius:16px;padding:1.2rem 1.5rem 1rem;
+  text-align:center;margin-bottom:1.2rem;
+  background:linear-gradient(145deg,rgba(17,24,39,.85),rgba(15,23,42,.95));
+  border:1px solid rgba(99,102,241,.12);
+  animation:fadeUp .4s ease both, inputBorderGlow 4s ease-in-out infinite}
+.input-banner::before{content:'';position:absolute;top:-60%;left:-30%;width:160%;height:160%;
+  background:radial-gradient(ellipse at 30% 20%,rgba(99,102,241,.06),transparent 50%),
+    radial-gradient(ellipse at 70% 80%,rgba(124,58,237,.04),transparent 50%);
+  pointer-events:none}
+.input-banner-icon{font-size:1.3rem;margin-right:.5rem;vertical-align:middle;
+  animation:inputOrbPulse 3s ease-in-out infinite;display:inline-block}
+.input-banner-title{font-size:1.05rem;font-weight:900;letter-spacing:-.3px;display:inline;
+  background:linear-gradient(135deg,#818cf8 0%,#a78bfa 30%,#e0e7ff 60%,#6366f1 100%);
+  background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  animation:shimmer 4s linear infinite}
+.input-banner-row{display:flex;align-items:center;justify-content:center;gap:.1rem;
+  margin-bottom:.4rem}
+.input-banner-sub{font-size:.78rem;color:var(--t3);max-width:440px;margin:0 auto .6rem;line-height:1.5}
+.input-flow-steps{display:flex;justify-content:center;gap:1rem}
+.input-flow-step{display:flex;align-items:center;gap:.3rem;font-size:.62rem;color:var(--t4);
+  font-weight:600;letter-spacing:.3px}
+.input-flow-step span{width:18px;height:18px;border-radius:50%;display:inline-flex;
+  align-items:center;justify-content:center;font-size:.55rem;font-weight:800;
+  background:rgba(99,102,241,.1);color:#818cf8;border:1px solid rgba(99,102,241,.2)}
+.input-flow-arrow{color:var(--t4);font-size:.55rem;opacity:.4}
+
+/* ── Analysis Results — premium banner ── */
+@keyframes analysisBorderGlow{
+  0%,100%{border-color:rgba(52,211,153,.12);box-shadow:0 0 20px rgba(52,211,153,.03)}
+  50%{border-color:rgba(52,211,153,.25);box-shadow:0 0 30px rgba(52,211,153,.06)}
+}
+@keyframes analysisOrbFloat{
+  0%,100%{transform:translateY(0) rotate(0deg)}
+  25%{transform:translateY(-3px) rotate(3deg)}
+  75%{transform:translateY(2px) rotate(-2deg)}
+}
+.analysis-banner{position:relative;overflow:hidden;border-radius:16px;padding:1.2rem 1.5rem 1rem;
+  text-align:center;margin-bottom:1.2rem;
+  background:linear-gradient(145deg,rgba(17,24,39,.85),rgba(15,23,42,.95));
+  border:1px solid rgba(52,211,153,.12);
+  animation:fadeUp .4s ease both, analysisBorderGlow 4s ease-in-out infinite}
+.analysis-banner::before{content:'';position:absolute;top:-60%;left:-30%;width:160%;height:160%;
+  background:radial-gradient(ellipse at 25% 30%,rgba(52,211,153,.05),transparent 50%),
+    radial-gradient(ellipse at 75% 70%,rgba(99,102,241,.04),transparent 50%);
+  pointer-events:none}
+.analysis-banner-icon{font-size:1.3rem;margin-right:.5rem;vertical-align:middle;
+  animation:analysisOrbFloat 3.5s ease-in-out infinite;display:inline-block}
+.analysis-banner-title{font-size:1.05rem;font-weight:900;letter-spacing:-.3px;display:inline;
+  background:linear-gradient(135deg,#34d399 0%,#6ee7b7 30%,#e0e7ff 60%,#818cf8 100%);
+  background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  animation:shimmer 4s linear infinite}
+.analysis-banner-row{display:flex;align-items:center;justify-content:center;gap:.1rem;
+  margin-bottom:.4rem}
+.analysis-banner-sub{font-size:.78rem;color:var(--t3);max-width:480px;margin:0 auto .6rem;line-height:1.5}
+.analysis-flow-steps{display:flex;justify-content:center;gap:.8rem;flex-wrap:wrap}
+.analysis-flow-step{display:flex;align-items:center;gap:.3rem;font-size:.62rem;color:var(--t4);
+  font-weight:600;letter-spacing:.3px}
+.analysis-flow-step span{width:18px;height:18px;border-radius:50%;display:inline-flex;
+  align-items:center;justify-content:center;font-size:.55rem;font-weight:800;
+  background:rgba(52,211,153,.1);color:#34d399;border:1px solid rgba(52,211,153,.2)}
+.analysis-flow-arrow{color:var(--t4);font-size:.55rem;opacity:.4}
 </style>"""
 
 st.markdown(CSS, unsafe_allow_html=True)
@@ -613,6 +684,24 @@ def render_dashboard():
 
 
 def _render_inputs():
+    # ── Input Command Center Banner ──
+    st.markdown('''<div class="input-banner">
+        <div class="input-banner-row">
+            <span class="input-banner-icon">🚀</span>
+            <span class="input-banner-title">Analysis Command Center</span>
+        </div>
+        <div class="input-banner-sub">
+            Upload your resume and paste the target job description to unlock your personalized readiness report.
+        </div>
+        <div class="input-flow-steps">
+            <div class="input-flow-step"><span>1</span> Upload</div>
+            <div class="input-flow-arrow">▸</div>
+            <div class="input-flow-step"><span>2</span> Paste JD</div>
+            <div class="input-flow-arrow">▸</div>
+            <div class="input-flow-step"><span>3</span> Analyze</div>
+        </div>
+    </div>''', unsafe_allow_html=True)
+
     # Name input
     name_val = st.text_input("Your name (optional)", value=st.session_state.user_name,
                               placeholder="Enter your name for a personalized experience", key="name_in")
@@ -861,21 +950,49 @@ def _run_analysis(resume_text: str, jd_text: str, is_demo: bool):
 # RESULTS RENDERING
 # ═══════════════════════════════════════════════════════════
 def _render_results(r: AnalysisResult):
-    # ── Greeting ──
+    # ── Determine engine badge ──
+    if r.gemini_used:
+        engine_icon = "⚡"
+        engine_label = "Gemini AI"
+    else:
+        engine_icon = "🔧"
+        engine_label = "Local Engine"
+
+    # ── Build greeting text ──
     if st.session_state.user_name:
         name = st.session_state.user_name
-        anim_cls = "greeting--static" if st.session_state.greeting_shown else "greeting--anim"
-        st.markdown(f'<div class="greeting {anim_cls}">Hey {name}, here\'s your readiness breakdown 👋</div>', unsafe_allow_html=True)
+        greeting_text = f"Hey {name}, your readiness report is ready"
         st.session_state.greeting_shown = True
+    else:
+        greeting_text = "Your readiness report is ready"
 
-    # ── Demo + Gemini badges ──
+    # ── Analysis Results Banner ──
+    job_title = getattr(r, 'job_title', '') or ''
+    title_snippet = f" for <em>{job_title}</em>" if job_title else ""
+    st.markdown(f'''<div class="analysis-banner">
+        <div class="analysis-banner-row">
+            <span class="analysis-banner-icon">📊</span>
+            <span class="analysis-banner-title">Analysis Complete</span>
+        </div>
+        <div class="analysis-banner-sub">
+            {greeting_text}{title_snippet} — powered by {engine_icon} {engine_label}
+        </div>
+        <div class="analysis-flow-steps">
+            <div class="analysis-flow-step"><span>✓</span> Role DNA</div>
+            <div class="analysis-flow-arrow">▸</div>
+            <div class="analysis-flow-step"><span>✓</span> Scoring</div>
+            <div class="analysis-flow-arrow">▸</div>
+            <div class="analysis-flow-step"><span>✓</span> Gaps</div>
+            <div class="analysis-flow-arrow">▸</div>
+            <div class="analysis-flow-step"><span>✓</span> SkillPrint</div>
+            <div class="analysis-flow-arrow">▸</div>
+            <div class="analysis-flow-step"><span>✓</span> Roadmap</div>
+        </div>
+    </div>''', unsafe_allow_html=True)
+
+    # ── Demo + fallback badges ──
     if r.is_demo:
         st.info("🔔 **Demo mode** — showing sample analysis. Upload your own resume & job description for personalized results.")
-    if r.gemini_used:
-        badge_line = '<span class="engine-badge engine-badge--gemini">⚡ Powered by Gemini</span>'
-    else:
-        badge_line = '<span class="engine-badge engine-badge--local">🔧 Local analysis engine</span>'
-    st.markdown(f'<div style="margin-bottom:var(--s4)">{badge_line}</div>', unsafe_allow_html=True)
     if r.fallback_used and not r.gemini_used and not r.is_demo:
         st.warning("⚠️ Gemini API was rate-limited. Analysis was generated using the local scoring engine. "
                    "Results are still accurate but less detailed. Try again later for AI-enhanced insights.")
