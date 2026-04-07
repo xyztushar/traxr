@@ -4,11 +4,17 @@ Streamlit app: Landing → Dashboard with Gemini-powered 360° readiness analysi
 """
 from __future__ import annotations
 import hashlib
+import os
 import streamlit as st
 import plotly.graph_objects as go
 import demodata
 from models import AnalysisResult, RoleDNA, ScoreDimension, GapItem, SkillPrint, RoadmapWeek
-from nlppipeline import extract_pdf_text, extract_skills, extract_profile_signals
+from nlppipeline import (
+    extract_pdf_text_basic, is_text_low_quality,
+    render_pdf_pages_for_ocr, extract_text_with_gemini_from_pages,
+    normalize_resume_text,
+    extract_skills, extract_profile_signals,
+)
 from scorer import compute_360_score, classify_gaps
 from llmclient import (
     build_role_dna, build_score_breakdown, build_gaps,
@@ -249,28 +255,6 @@ div[data-testid="stFileUploader"]:hover{border-color:var(--acc)}
 .cta-ghost .stButton>button:hover{border-color:var(--acc)!important;color:var(--t1)!important;
   background:var(--glow)!important;transform:translateY(-2px)!important}
 
-/* ── Input Command Center ── */
-.input-card-wrap{margin-bottom:1.5rem}
-.input-card-wrap [data-testid="stVerticalBlockBorderWrapper"]{
-  background:rgba(17,24,39,.4)!important;border:1px solid #1e2d3d!important;
-  border-radius:16px!important;padding:1.5rem!important;transition:all .3s ease}
-.input-card-ready [data-testid="stVerticalBlockBorderWrapper"]{
-  border-color:#3b82f6!important;background:rgba(17,24,39,.6)!important;
-  box-shadow:0 0 20px rgba(59,130,246,.1)}
-.input-card-label{font-family:'Space Mono',monospace;color:#94a3b8;font-size:.75rem;
-  letter-spacing:.15rem;text-transform:uppercase;margin-bottom:1.25rem;
-  display:flex;align-items:center;gap:.6rem}
-.or-divider{display:flex;align-items:center;text-align:center;color:#4b5563;
-  font-size:.65rem;font-family:'Space Mono',monospace;margin:1.25rem 0}
-.or-divider::before,.or-divider::after{content:'';flex:1;border-bottom:1px solid #1e2d3d}
-.or-divider:not(:empty)::before{margin-right:1rem}
-.or-divider:not(:empty)::after{margin-left:1rem}
-.helper-text{color:#64748b;font-size:.7rem;line-height:1.4;margin-top:.5rem}
-.analyze-cta-row{display:flex;justify-content:center;margin-top:2rem;width:100%}
-.cmd-header{text-align:center;margin-bottom:2rem}
-.cmd-title{font-size:1.2rem;font-weight:800;color:var(--t1);letter-spacing:-.3px}
-.cmd-sub{font-size:.82rem;color:#94a3b8;margin-top:.3rem}
-
 /* Tabs */
 .stTabs [data-baseweb="tab-list"]{gap:0;border-bottom:1px solid var(--bdr);padding:0}
 .stTabs [data-baseweb="tab"]{background:transparent;color:var(--t4);border:none;
@@ -291,14 +275,89 @@ div[data-testid="stFileUploader"]:hover{border-color:var(--acc)}
 [data-testid="stMetricLabel"]{color:var(--t4)!important;font-weight:600!important;font-size:.72rem!important}
 [data-testid="stMetricValue"]{color:var(--t1)!important;font-weight:800!important;font-size:1.3rem!important}
 
-/* Input card */
-.input-wrap [data-testid="stVerticalBlockBorderWrapper"]{
-  background:var(--card)!important;border:1px solid var(--bdr)!important;border-radius:var(--r)!important;
-  padding:var(--s5)!important;height:100%!important}
-.input-wrap [data-testid="stVerticalBlockBorderWrapper"]:hover{border-color:var(--bdr-h)!important}
-.input-wrap [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stVerticalBlockBorderWrapper"]{
+/* Input Command Center */
+.input-card-wrap{margin-bottom:1.5rem}
+.input-card-wrap [data-testid="stVerticalBlockBorderWrapper"]{
+  background:rgba(17,24,39,.4)!important;border:1px solid #1e2d3d!important;
+  border-radius:16px!important;padding:1.5rem!important;transition:all .3s ease}
+.input-card-wrap [data-testid="stVerticalBlockBorderWrapper"]:hover{
+  border-color:var(--bdr-h)!important}
+.input-card-wrap [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stVerticalBlockBorderWrapper"]{
   background:transparent!important;border:none!important;box-shadow:none!important;
   padding:0!important;border-radius:0!important;height:auto!important}
+.input-card-ready [data-testid="stVerticalBlockBorderWrapper"]{
+  border-color:#3b82f6!important;background:rgba(17,24,39,.6)!important;
+  box-shadow:0 0 20px rgba(59,130,246,.1)}
+.input-card-label{font-family:'Inter',system-ui,sans-serif;color:#94a3b8;font-size:.75rem;
+  letter-spacing:.15rem;text-transform:uppercase;margin-bottom:1.25rem;
+  display:flex;align-items:center;gap:.6rem;font-weight:700}
+.or-divider{display:flex;align-items:center;text-align:center;color:#4b5563;
+  font-size:.65rem;font-weight:600;margin:1.25rem 0;letter-spacing:.1rem}
+.or-divider::before,.or-divider::after{content:'';flex:1;border-bottom:1px solid #1e2d3d}
+.or-divider:not(:empty)::before{margin-right:1rem}
+.or-divider:not(:empty)::after{margin-left:1rem}
+.helper-text{color:#64748b;font-size:.7rem;line-height:1.4;margin-top:.5rem}
+.analyze-cta-row{display:flex;justify-content:center;margin-top:2rem;width:100%}
+/* Dark-style file uploader */
+[data-testid="stFileUploader"]{background:transparent}
+[data-testid="stFileUploaderDropzone"]{background:rgba(30,45,61,.45)!important;
+  border:1px dashed rgba(148,163,184,.18)!important;border-radius:.75rem!important}
+[data-testid="stFileUploaderDropzone"]:hover{border-color:rgba(99,102,241,.4)!important;
+  background:rgba(30,45,61,.65)!important}
+[data-testid="stFileUploaderDropzone"] small{color:#64748b!important}
+[data-testid="stFileUploaderDropzone"] button{background:#1e293b!important;
+  color:#94a3b8!important;border:1px solid rgba(148,163,184,.15)!important}
+
+/* Demo Lab — Compact premium banner */
+@keyframes demoBorderGlow{
+  0%,100%{border-color:rgba(251,191,36,.15);box-shadow:0 0 20px rgba(251,191,36,.03)}
+  50%{border-color:rgba(167,139,250,.25);box-shadow:0 0 28px rgba(99,102,241,.06)}
+}
+@keyframes demoOrbFloat{
+  0%,100%{transform:translateY(0)}
+  50%{transform:translateY(-4px)}
+}
+.demo-banner{position:relative;overflow:hidden;border-radius:16px;padding:1.2rem 1.5rem 1rem;
+  text-align:center;margin-bottom:1rem;
+  background:linear-gradient(145deg,rgba(17,24,39,.85),rgba(15,23,42,.95));
+  border:1px solid rgba(251,191,36,.12);
+  animation:fadeUp .4s ease both, demoBorderGlow 4s ease-in-out infinite}
+.demo-banner::before{content:'';position:absolute;top:-60%;left:-30%;width:160%;height:160%;
+  background:radial-gradient(ellipse at 30% 20%,rgba(251,191,36,.05),transparent 50%),
+    radial-gradient(ellipse at 70% 80%,rgba(99,102,241,.04),transparent 50%);
+  pointer-events:none}
+.demo-banner-icon{font-size:1.3rem;margin-right:.5rem;vertical-align:middle;
+  animation:demoOrbFloat 3s ease-in-out infinite;display:inline-block}
+.demo-banner-title{font-size:1.05rem;font-weight:900;letter-spacing:-.3px;display:inline;
+  background:linear-gradient(135deg,#fbbf24 0%,#f59e0b 30%,#e0e7ff 60%,#a78bfa 100%);
+  background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  animation:shimmer 4s linear infinite}
+.demo-banner-row{display:flex;align-items:center;justify-content:center;gap:.1rem;
+  margin-bottom:.4rem}
+.demo-banner-sub{font-size:.78rem;color:var(--t3);max-width:420px;margin:0 auto .6rem;line-height:1.5}
+.demo-flow-steps{display:flex;justify-content:center;gap:1rem}
+.demo-flow-step{display:flex;align-items:center;gap:.3rem;font-size:.62rem;color:var(--t4);
+  font-weight:600;letter-spacing:.3px}
+.demo-flow-step span{width:18px;height:18px;border-radius:50%;display:inline-flex;
+  align-items:center;justify-content:center;font-size:.55rem;font-weight:800;
+  background:rgba(251,191,36,.1);color:#fbbf24;border:1px solid rgba(251,191,36,.2)}
+.demo-flow-arrow{color:var(--t4);font-size:.55rem;opacity:.4}
+
+/* Demo generate CTA — main (gold gradient border) */
+.demo-gen-cta{position:relative;border-radius:12px;padding:2px;
+  background:linear-gradient(135deg,rgba(251,191,36,.4),rgba(167,139,250,.4),rgba(251,191,36,.4));
+  background-size:200% auto;animation:shimmer 3s linear infinite;
+  margin:0 auto;max-width:340px;transition:all .3s ease}
+.demo-gen-cta:hover{transform:translateY(-2px);
+  box-shadow:0 6px 24px rgba(251,191,36,.15),0 3px 12px rgba(99,102,241,.1)}
+
+/* Demo generate — individual column buttons (indigo gradient border) */
+.demo-gen-sm{position:relative;border-radius:10px;padding:1.5px;
+  background:linear-gradient(135deg,rgba(99,102,241,.35),rgba(167,139,250,.3),rgba(99,102,241,.35));
+  background-size:200% auto;animation:shimmer 3.5s linear infinite;
+  transition:all .3s ease}
+.demo-gen-sm:hover{transform:translateY(-2px);
+  box-shadow:0 5px 20px rgba(99,102,241,.15),0 2px 10px rgba(167,139,250,.1)}
 </style>"""
 
 st.markdown(CSS, unsafe_allow_html=True)
@@ -313,6 +372,8 @@ _DEFAULTS = {
     "skillprint_code": "",
     "skillprint_eval": None,
     "greeting_shown": False,  # Prevents greeting animation replay
+    "demo_generated_resume": "",
+    "demo_generated_jd": "",
 }
 for k, v in _DEFAULTS.items():
     if k not in st.session_state:
@@ -322,6 +383,11 @@ for k, v in _DEFAULTS.items():
 # HELPERS
 # ═══════════════════════════════════════════════════════════
 def _h(t): return hashlib.md5(t.encode()).hexdigest()
+
+def _get_api_key() -> str | None:
+    """Resolve the next available Gemini API key from the rotation pool."""
+    from key_pool import get_next_api_key
+    return get_next_api_key()
 
 def _color(s):
     if s >= 75: return "#34d399"
@@ -402,8 +468,8 @@ def render_landing():
         with c1:
             st.markdown('<div class="cta-primary">', unsafe_allow_html=True)
             if st.button("▶  Try Demo", key="cta_demo", use_container_width=True):
-                st.session_state.view = "dashboard"
-                _run_analysis(demodata.DEMO_RESUME_TEXT, demodata.DEMO_JD_TEXT, True)
+                st.session_state.view = "demo_generator"
+                st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
         with c2:
             st.markdown('<div class="cta-ghost">', unsafe_allow_html=True)
@@ -547,22 +613,14 @@ def render_dashboard():
 
 
 def _render_inputs():
-    """Premium Analysis Command Center input layout."""
-    # ── Header ──
-    st.markdown("""<div class="cmd-header">
-        <div class="cmd-title">Analysis Command Center</div>
-        <div class="cmd-sub">Upload your credentials and the target role to begin deep analysis.</div>
-    </div>""", unsafe_allow_html=True)
-
-    # ── Name input ──
+    # Name input
     name_val = st.text_input("Your name (optional)", value=st.session_state.user_name,
                               placeholder="Enter your name for a personalized experience", key="name_in")
     st.session_state.user_name = name_val
 
-    # ── Two-column input grid ──
     col_l, col_r = st.columns(2, gap="large")
 
-    # ── Resume Card (Left) ──
+    # ── RESUME CARD (Left) ──
     with col_l:
         uploaded = st.session_state.get("pdf_up")
         ready_class = "input-card-ready" if uploaded else ""
@@ -571,62 +629,115 @@ def _render_inputs():
             st.markdown('<div class="input-card-label"><span>📄</span> Resume</div>', unsafe_allow_html=True)
             uploaded = st.file_uploader("Upload PDF", type=["pdf"], label_visibility="collapsed", key="pdf_up")
             st.markdown('<div class="or-divider">OR</div>', unsafe_allow_html=True)
-            resume_paste = st.text_area(
-                "Paste Resume", height=180,
+            resume_paste = st.text_area("Paste Resume", height=150,
                 placeholder="Paste the full text of your resume here…",
-                label_visibility="collapsed", key="res_paste"
-            )
+                label_visibility="collapsed", key="res_paste")
             st.markdown(
                 '<div class="helper-text">※ PDF upload takes priority. Ensure text is selectable if using PDF.</div>',
-                unsafe_allow_html=True
-            )
+                unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Job Description Card (Right) ──
+    # ── JOB DESCRIPTION CARD (Right) ──
     with col_r:
         st.markdown('<div class="input-card-wrap">', unsafe_allow_html=True)
         with st.container(border=True):
             st.markdown('<div class="input-card-label"><span>💼</span> Job Description</div>', unsafe_allow_html=True)
-            jd_input = st.text_area(
-                "Paste Job Description", height=350,
+            jd_input = st.text_area("Paste Job Description", height=328,
                 placeholder="Paste the full job description here…",
-                label_visibility="collapsed", key="jd_in"
-            )
+                label_visibility="collapsed", key="jd_in")
             if jd_input and len(jd_input) < 100:
                 st.warning(f"Job description seems short ({len(jd_input)} chars).")
             st.markdown(
                 '<div class="helper-text">※ Paste the full text for better semantic matching and gap detection.</div>',
-                unsafe_allow_html=True
-            )
+                unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Analyze CTA Row ──
+    # ── ANALYZE CTA ROW ──
     st.markdown('<div class="analyze-cta-row">', unsafe_allow_html=True)
-    analyze_clicked = st.button("🚀  Analyze Readiness", type="primary", use_container_width=True, key="analyze_btn")
+    _, bc, _ = st.columns([2, 2, 2])
+    with bc:
+        st.markdown('<div class="cta-primary">', unsafe_allow_html=True)
+        analyze_clicked = st.button("🚀  Analyze Readiness", use_container_width=True, key="analyze_btn")
+        st.markdown('</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
     if analyze_clicked:
-        # ── Resolve resume text (Priority: paste > PDF) ──
         resume_text = ""
-        resume_error = None
-
-        if resume_paste and resume_paste.strip():
-            resume_text = resume_paste.strip()
-        elif uploaded:
-            resume_text, resume_error = extract_pdf_text(uploaded)
+        used_ocr = False
+        extraction_method = "none"
+        pages_processed = 0
+        chars_extracted = 0
+        low_quality = False
 
         jd = jd_input.strip() if jd_input else ""
 
+        # Priority 1: uploaded PDF → staged extraction pipeline
+        if uploaded:
+            api_key = _get_api_key()
+            uploaded.seek(0)
+
+            with st.spinner("Reading PDF text..."):
+                raw_text = extract_pdf_text_basic(uploaded)
+                low_quality = is_text_low_quality(raw_text)
+
+            if not low_quality and raw_text.strip():
+                resume_text = normalize_resume_text(raw_text)
+                extraction_method = "pypdf"
+                chars_extracted = len(resume_text)
+                st.success("Resume parsed successfully.")
+            elif api_key:
+                with st.spinner("Text layer weak. Running OCR fallback (this may take up to a minute)..."):
+                    uploaded.seek(0)
+                    page_images = render_pdf_pages_for_ocr(uploaded)
+                    pages_processed = len(page_images)
+                    ocr_text = extract_text_with_gemini_from_pages(page_images, api_key)
+                    used_ocr = True
+
+                if ocr_text and len(ocr_text.strip()) >= 100:
+                    with st.spinner("OCR complete."):
+                        resume_text = normalize_resume_text(ocr_text)
+                    extraction_method = "gemini_ocr"
+                    chars_extracted = len(resume_text)
+                    st.success("Resume parsed using OCR fallback.")
+                elif raw_text.strip():
+                    resume_text = normalize_resume_text(raw_text)
+                    extraction_method = "pypdf"
+                    chars_extracted = len(resume_text)
+                    st.warning("We extracted partial text. Review it before analyzing.")
+                else:
+                    st.error(
+                        "OCR could not read this PDF (the API may be rate-limited). "
+                        "Please **paste your resume text** in the text box below, "
+                        "or try again in a minute."
+                    )
+            elif raw_text.strip():
+                resume_text = normalize_resume_text(raw_text)
+                extraction_method = "pypdf"
+                chars_extracted = len(resume_text)
+                st.warning("We extracted partial text. Review it before analyzing.")
+            else:
+                st.error("Could not extract readable text from this PDF.")
+
+            # Debug expander (shown when extraction produced something)
+            if resume_text:
+                with st.expander("🔬 Extraction details", expanded=False):
+                    st.caption(f"Method: {extraction_method}")
+                    st.caption(f"Characters extracted: {chars_extracted:,}")
+                    st.caption(f"Pages processed: {pages_processed}")
+                    st.caption(f"OCR used: {'Yes' if used_ocr else 'No'}")
+                    st.caption(f"Quality gate: {'Failed (triggered OCR)' if low_quality else 'Passed'}")
+
+        # Priority 2: pasted text
+        if not resume_text and resume_paste and resume_paste.strip():
+            resume_text = resume_paste.strip()
+
         # ── Validate ──
         if not resume_text and not jd:
-            st.error("Please provide both a **Resume** and a **Job Description** to begin.")
+            st.error("Please provide both a **resume** and a **job description** to begin.")
         elif not resume_text:
-            if resume_error:
-                st.error(f"📄 {resume_error}")
-            else:
-                st.error("Resume content is missing. Please upload a PDF or paste text.")
+            st.error("Resume content is missing. Please upload a PDF or paste text.")
         elif not jd:
-            st.error("Job Description is missing. Please paste the target role description.")
+            st.error("Job description is missing. Please paste the target role description.")
         else:
             _run_analysis(resume_text, jd, False)
 
@@ -765,6 +876,9 @@ def _render_results(r: AnalysisResult):
     else:
         badge_line = '<span class="engine-badge engine-badge--local">🔧 Local analysis engine</span>'
     st.markdown(f'<div style="margin-bottom:var(--s4)">{badge_line}</div>', unsafe_allow_html=True)
+    if r.fallback_used and not r.gemini_used and not r.is_demo:
+        st.warning("⚠️ Gemini API was rate-limited. Analysis was generated using the local scoring engine. "
+                   "Results are still accurate but less detailed. Try again later for AI-enhanced insights.")
 
     # ══════ Score Hero ══════
     dims = r.dimensions_dict
@@ -815,16 +929,127 @@ def _tab_overview(r: AnalysisResult):
 # ── Tab: Role DNA ──
 def _tab_role_dna(r: AnalysisResult):
     dna = r.role_dna
-    c1, c2 = st.columns(2, gap="medium")
-    with c1:
-        st.markdown(f'<div class="card"><div class="card-title">🔴 Required Skills</div><p class="t-body">{", ".join(s.title() for s in dna.required_skills) or "—"}</p></div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="card"><div class="card-title">🟡 Preferred Skills</div><p class="t-body">{", ".join(s.title() for s in dna.preferred_skills) or "—"}</p></div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="card"><div class="card-title">🛠️ Tools</div><p class="t-body">{", ".join(s.title() for s in dna.tools) or "—"}</p></div>', unsafe_allow_html=True)
-    with c2:
-        st.markdown(f'<div class="card"><div class="card-title">🎯 Role Context</div><p class="t-body">{dna.role_context or "—"}</p></div>', unsafe_allow_html=True)
-        acts_html = "".join(f"<li>{a}</li>" for a in dna.day_to_day)
-        st.markdown(f'<div class="card"><div class="card-title">💼 Day-to-Day</div><ul class="t-body" style="padding-left:1.1rem;margin:0">{acts_html or "<li>—</li>"}</ul></div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="card"><div class="card-title">🧠 Behavioral</div><p class="t-body">{", ".join(dna.behavioral_traits) or "—"}</p></div>', unsafe_allow_html=True)
+
+    # ── Role Context banner (full-width) ──
+    st.markdown(f'''<div style="background:linear-gradient(135deg,rgba(99,102,241,.08),rgba(124,58,237,.05));
+        border:1px solid rgba(99,102,241,.15);border-radius:var(--r);padding:var(--s5) var(--s6);
+        margin-bottom:var(--s5);animation:fadeUp .4s ease both">
+        <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:var(--s3)">
+            <span style="font-size:1.1rem">🎯</span>
+            <span style="font-size:.72rem;font-weight:700;color:var(--acc2);text-transform:uppercase;
+                letter-spacing:1.5px">Role Context</span>
+        </div>
+        <p style="font-size:.92rem;color:var(--t1);line-height:1.7;margin:0;font-weight:400">
+            {dna.role_context or "No role context available."}</p>
+    </div>''', unsafe_allow_html=True)
+
+    # ── Skills section (3-column) ──
+    sc1, sc2, sc3 = st.columns(3, gap="medium")
+
+    # Required Skills
+    with sc1:
+        req_chips = "".join(
+            f'<span style="display:inline-block;padding:5px 12px;margin:3px;border-radius:8px;'
+            f'font-size:.76rem;font-weight:600;color:#f87171;'
+            f'background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.18)">{s.title()}</span>'
+            for s in dna.required_skills
+        ) if dna.required_skills else '<span style="color:var(--t4);font-size:.85rem">—</span>'
+        st.markdown(f'''<div style="background:var(--card);border:1px solid var(--bdr);border-radius:var(--r);
+            padding:var(--s5);height:100%;animation:fadeUp .45s ease .05s both">
+            <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:var(--s4)">
+                <div style="width:8px;height:8px;border-radius:50%;background:#f87171"></div>
+                <span style="font-size:.72rem;font-weight:700;color:var(--t3);text-transform:uppercase;
+                    letter-spacing:.8px">Required Skills</span>
+                <span style="margin-left:auto;font-size:.65rem;font-weight:700;color:var(--t4);
+                    background:rgba(248,113,113,.08);padding:1px 8px;border-radius:10px">{len(dna.required_skills)}</span>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:2px">{req_chips}</div>
+        </div>''', unsafe_allow_html=True)
+
+    # Preferred Skills
+    with sc2:
+        pref_chips = "".join(
+            f'<span style="display:inline-block;padding:5px 12px;margin:3px;border-radius:8px;'
+            f'font-size:.76rem;font-weight:600;color:#fbbf24;'
+            f'background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.15)">{s.title()}</span>'
+            for s in dna.preferred_skills
+        ) if dna.preferred_skills else '<span style="color:var(--t4);font-size:.85rem">—</span>'
+        st.markdown(f'''<div style="background:var(--card);border:1px solid var(--bdr);border-radius:var(--r);
+            padding:var(--s5);height:100%;animation:fadeUp .45s ease .1s both">
+            <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:var(--s4)">
+                <div style="width:8px;height:8px;border-radius:50%;background:#fbbf24"></div>
+                <span style="font-size:.72rem;font-weight:700;color:var(--t3);text-transform:uppercase;
+                    letter-spacing:.8px">Preferred Skills</span>
+                <span style="margin-left:auto;font-size:.65rem;font-weight:700;color:var(--t4);
+                    background:rgba(251,191,36,.06);padding:1px 8px;border-radius:10px">{len(dna.preferred_skills)}</span>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:2px">{pref_chips}</div>
+        </div>''', unsafe_allow_html=True)
+
+    # Tools
+    with sc3:
+        tool_chips = "".join(
+            f'<span style="display:inline-block;padding:5px 12px;margin:3px;border-radius:8px;'
+            f'font-size:.76rem;font-weight:600;color:var(--acc3);'
+            f'background:rgba(99,102,241,.06);border:1px solid rgba(99,102,241,.12)">{s.title()}</span>'
+            for s in dna.tools
+        ) if dna.tools else '<span style="color:var(--t4);font-size:.85rem">—</span>'
+        st.markdown(f'''<div style="background:var(--card);border:1px solid var(--bdr);border-radius:var(--r);
+            padding:var(--s5);height:100%;animation:fadeUp .45s ease .15s both">
+            <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:var(--s4)">
+                <span style="font-size:.7rem">🛠️</span>
+                <span style="font-size:.72rem;font-weight:700;color:var(--t3);text-transform:uppercase;
+                    letter-spacing:.8px">Tools & Platforms</span>
+                <span style="margin-left:auto;font-size:.65rem;font-weight:700;color:var(--t4);
+                    background:rgba(99,102,241,.06);padding:1px 8px;border-radius:10px">{len(dna.tools)}</span>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:2px">{tool_chips}</div>
+        </div>''', unsafe_allow_html=True)
+
+    # ── Bottom row: Day-to-Day + Behavioral ──
+    b1, b2 = st.columns([3, 2], gap="medium")
+
+    with b1:
+        acts_html = ""
+        for i, a in enumerate(dna.day_to_day):
+            acts_html += (
+                f'<div style="display:flex;align-items:flex-start;gap:.7rem;padding:.55rem 0;'
+                f'border-bottom:1px solid rgba(148,163,184,.05)">'
+                f'<span style="flex-shrink:0;width:20px;height:20px;border-radius:6px;'
+                f'background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.12);'
+                f'display:flex;align-items:center;justify-content:center;'
+                f'font-size:.6rem;font-weight:700;color:var(--acc2);margin-top:1px">{i+1}</span>'
+                f'<span style="font-size:.85rem;color:var(--t2);line-height:1.5">{a}</span>'
+                f'</div>'
+            )
+        if not acts_html:
+            acts_html = '<span style="color:var(--t4);font-size:.85rem">—</span>'
+        st.markdown(f'''<div style="background:var(--card);border:1px solid var(--bdr);border-radius:var(--r);
+            padding:var(--s5);margin-top:var(--s4);animation:fadeUp .45s ease .2s both">
+            <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:var(--s3)">
+                <span style="font-size:.8rem">💼</span>
+                <span style="font-size:.72rem;font-weight:700;color:var(--t3);text-transform:uppercase;
+                    letter-spacing:.8px">Day-to-Day Responsibilities</span>
+            </div>
+            {acts_html}
+        </div>''', unsafe_allow_html=True)
+
+    with b2:
+        behav_chips = "".join(
+            f'<span style="display:inline-block;padding:6px 14px;margin:3px;border-radius:20px;'
+            f'font-size:.78rem;font-weight:500;color:var(--t2);'
+            f'background:rgba(148,163,184,.06);border:1px solid rgba(148,163,184,.1)">{t.title()}</span>'
+            for t in dna.behavioral_traits
+        ) if dna.behavioral_traits else '<span style="color:var(--t4);font-size:.85rem">—</span>'
+        st.markdown(f'''<div style="background:var(--card);border:1px solid var(--bdr);border-radius:var(--r);
+            padding:var(--s5);margin-top:var(--s4);animation:fadeUp .45s ease .25s both">
+            <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:var(--s4)">
+                <span style="font-size:.8rem">🧠</span>
+                <span style="font-size:.72rem;font-weight:700;color:var(--t3);text-transform:uppercase;
+                    letter-spacing:.8px">Behavioral Traits</span>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:2px">{behav_chips}</div>
+        </div>''', unsafe_allow_html=True)
 
 
 # ── Tab: Score Breakdown ──
@@ -940,9 +1165,274 @@ def _tab_roadmap(r: AnalysisResult):
 
 
 # ═══════════════════════════════════════════════════════════
+# DEMO GENERATOR PAGE
+# ═══════════════════════════════════════════════════════════
+
+_DEMO_RESUME_PROMPT = """Generate a realistic, plain-text resume for a random tech professional.
+Pick ONE of these roles randomly: Frontend Developer, Backend Developer, Full-Stack Engineer,
+Data Scientist, ML Engineer, DevOps Engineer, Mobile Developer, Cloud Architect.
+
+The resume MUST include:
+- Name (make one up), contact info, location
+- A 2-3 sentence professional summary
+- 2-3 work experiences with company names, dates, bullet points showing accomplishments
+- Education section
+- Technical skills section
+- Optionally: projects, certifications
+
+IMPORTANT RULES:
+- Output ONLY the resume text, no markdown formatting, no code fences
+- Use plain text with simple line breaks and bullet points (- or •)
+- Make the candidate good but imperfect — include some skill gaps
+- Make experiences realistic with metrics where possible
+- Keep it 300-500 words"""
+
+_DEMO_JD_PROMPT = """Generate a realistic job description for a random tech role at a fictional company.
+Pick ONE of these roles randomly: Software Engineer Intern, Frontend Developer, Backend Engineer,
+Full-Stack Developer, Data Analyst, ML Engineer, DevOps Engineer, Platform Engineer.
+
+The JD MUST include:
+- Job title and company name (make one up)
+- About the company (2-3 sentences)
+- Role description (2-3 sentences)
+- Required qualifications (5-8 bullet points)
+- Preferred qualifications (3-5 bullet points)
+- Responsibilities (5-7 bullet points)
+
+IMPORTANT RULES:
+- Output ONLY the job description text, no markdown formatting, no code fences
+- Use plain text with simple line breaks and bullet points (- or •)
+- Make requirements realistic — mix of must-haves and stretch goals
+- Include specific technologies, tools, and soft skills
+- Keep it 250-450 words"""
+
+
+def _generate_with_gemini(prompt: str) -> str:
+    """Generate text using Gemini with key rotation."""
+    from key_pool import get_all_api_keys, mark_key_exhausted
+    import time
+
+    keys = get_all_api_keys()
+    if not keys:
+        return ""
+
+    for key in keys:
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=key)
+            model = genai.GenerativeModel("gemini-2.5-flash")
+            response = model.generate_content(
+                prompt,
+                generation_config=genai.GenerationConfig(temperature=1.0),
+            )
+            text = (response.text or "").strip()
+            # Strip markdown fencing if present
+            if text.startswith("```"):
+                text = text.split("\n", 1)[-1]
+            if text.endswith("```"):
+                text = text.rsplit("```", 1)[0]
+            return text.strip()
+        except Exception as exc:
+            if "429" in str(exc):
+                mark_key_exhausted(key)
+                continue
+            return ""
+    return ""
+
+
+def render_demo_page():
+    """Render the Interactive Demo Generator page."""
+
+    # ── Header bar ──
+    hdr_l, hdr_r = st.columns([4, 1])
+    with hdr_l:
+        st.markdown(f'''<div class="dash-bar-left" style="gap:.6rem">
+            <span class="t-brand-sm">TRAXR</span>
+            <span class="dash-bar-tag" style="background:rgba(251,191,36,.08);color:#fbbf24;
+                border-color:rgba(251,191,36,.2)">🧪 Demo Lab</span>
+        </div>''', unsafe_allow_html=True)
+    with hdr_r:
+        st.markdown('<div class="cta-ghost">', unsafe_allow_html=True)
+        if st.button("← Back", key="demo_back", use_container_width=True):
+            st.session_state.view = "landing"
+            st.session_state.demo_generated_resume = ""
+            st.session_state.demo_generated_jd = ""
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('<hr style="margin:.5rem 0 1rem">', unsafe_allow_html=True)
+
+    # ── Compact Premium Banner ──
+    st.markdown('''<div class="demo-banner">
+        <div class="demo-banner-row">
+            <span class="demo-banner-icon">🧪</span>
+            <span class="demo-banner-title">Interactive Demo Mode</span>
+        </div>
+        <div class="demo-banner-sub">
+            Generate sample inputs, edit them if needed, then analyze the fit.
+        </div>
+        <div class="demo-flow-steps">
+            <div class="demo-flow-step"><span>1</span> Generate</div>
+            <div class="demo-flow-arrow">▸</div>
+            <div class="demo-flow-step"><span>2</span> Edit</div>
+            <div class="demo-flow-arrow">▸</div>
+            <div class="demo-flow-step"><span>3</span> Analyze</div>
+        </div>
+    </div>''', unsafe_allow_html=True)
+
+    # ── Generate Both button ──
+    _, gen_both_col, _ = st.columns([1, 2, 1])
+    with gen_both_col:
+        st.markdown('<div class="demo-gen-cta">', unsafe_allow_html=True)
+        if st.button("✨  Generate Demo Inputs", key="gen_both", use_container_width=True, type="tertiary"):
+            with st.spinner("Generating resume and job description..."):
+                r_text = _generate_with_gemini(_DEMO_RESUME_PROMPT)
+                j_text = _generate_with_gemini(_DEMO_JD_PROMPT)
+                if r_text:
+                    st.session_state.demo_generated_resume = r_text
+                if j_text:
+                    st.session_state.demo_generated_jd = j_text
+                if r_text or j_text:
+                    st.rerun()
+                else:
+                    st.error("Generation failed — API may be rate-limited. Try again in a moment.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
+
+    # ── Two-column generator ──
+    col_r, col_j = st.columns(2, gap="large")
+
+    with col_r:
+        st.markdown(f'''<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:var(--s3)">
+            <span style="font-size:1rem">👤</span>
+            <span style="font-size:.75rem;font-weight:700;color:var(--t3);text-transform:uppercase;
+                letter-spacing:1px">Candidate Resume</span>
+        </div>''', unsafe_allow_html=True)
+
+        demo_resume = st.text_area(
+            "Resume",
+            value=st.session_state.demo_generated_resume,
+            height=340,
+            placeholder="Click 'Generate' below to create a random candidate profile, or paste your own...",
+            label_visibility="collapsed",
+            key="demo_resume_area",
+        )
+        # Sync edits back
+        if demo_resume != st.session_state.demo_generated_resume:
+            st.session_state.demo_generated_resume = demo_resume
+
+        st.markdown('<div class="demo-gen-sm" style="margin-top:var(--s2)">', unsafe_allow_html=True)
+        if st.button("✨  Generate Resume", key="gen_resume", use_container_width=True, type="tertiary"):
+            with st.spinner("Generating candidate profile..."):
+                text = _generate_with_gemini(_DEMO_RESUME_PROMPT)
+                if text:
+                    st.session_state.demo_generated_resume = text
+                    st.rerun()
+                else:
+                    st.error("Generation failed — API may be rate-limited. Try again in a moment.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col_j:
+        st.markdown(f'''<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:var(--s3)">
+            <span style="font-size:1rem">💼</span>
+            <span style="font-size:.75rem;font-weight:700;color:var(--t3);text-transform:uppercase;
+                letter-spacing:1px">Job Description</span>
+        </div>''', unsafe_allow_html=True)
+
+        demo_jd = st.text_area(
+            "Job Description",
+            value=st.session_state.demo_generated_jd,
+            height=340,
+            placeholder="Click 'Generate' below to create a random job role, or paste your own...",
+            label_visibility="collapsed",
+            key="demo_jd_area",
+        )
+        if demo_jd != st.session_state.demo_generated_jd:
+            st.session_state.demo_generated_jd = demo_jd
+
+        st.markdown('<div class="demo-gen-sm" style="margin-top:var(--s2)">', unsafe_allow_html=True)
+        if st.button("✨  Generate Job Description", key="gen_jd", use_container_width=True, type="tertiary"):
+            with st.spinner("Generating job description..."):
+                text = _generate_with_gemini(_DEMO_JD_PROMPT)
+                if text:
+                    st.session_state.demo_generated_jd = text
+                    st.rerun()
+                else:
+                    st.error("Generation failed — API may be rate-limited. Try again in a moment.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Status indicators ──
+    has_resume = bool(st.session_state.demo_generated_resume.strip())
+    has_jd = bool(st.session_state.demo_generated_jd.strip())
+
+    r_icon = "✅" if has_resume else "⬜"
+    j_icon = "✅" if has_jd else "⬜"
+    st.markdown(f'''<div style="display:flex;justify-content:center;gap:var(--s6);margin:var(--s5) 0 var(--s3);
+        font-size:.78rem;color:var(--t3)">
+        <span>{r_icon} Resume ready</span>
+        <span>{j_icon} Job description ready</span>
+    </div>''', unsafe_allow_html=True)
+
+    # ── Analyze CTA ──
+    st.markdown('<div class="analyze-cta-row">', unsafe_allow_html=True)
+    _, bc, _ = st.columns([2, 2, 2])
+    with bc:
+        st.markdown('<div class="cta-primary">', unsafe_allow_html=True)
+        if st.button("🚀  Analyze Demo Fit", use_container_width=True, key="demo_analyze_btn"):
+            resume = st.session_state.demo_generated_resume.strip()
+            jd = st.session_state.demo_generated_jd.strip()
+            if not resume or not jd:
+                st.error("Please generate (or paste) both a resume and a job description first.")
+            else:
+                st.session_state.view = "dashboard"
+                _run_analysis(resume, jd, is_demo=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Footer tip ──
+    st.markdown(f'''<div style="text-align:center;color:var(--t4);font-size:.72rem;padding:var(--s5) 0 var(--s3);
+        border-top:1px solid var(--bdr);margin-top:var(--s6)">
+        💡 Tip: You can edit the generated text before analyzing.
+        Want to use your real resume? ← Go back and click <b>Analyze Now</b>.
+    </div>''', unsafe_allow_html=True)
+
+    # ── Late-injected button overrides ──
+    # Generate buttons have class em9zgd03, action buttons have em9zgd02.
+    # We target em9zgd03 to style only the generate buttons.
+    st.markdown('''<style>
+    button.em9zgd03,
+    button[class*="em9zgd03"] {
+        background: linear-gradient(135deg, #10152a 0%, #141b30 100%) !important;
+        border: 1px solid rgba(99, 102, 241, .3) !important;
+        border-radius: 10px !important;
+        color: #c4b5fd !important;
+        font-weight: 600 !important;
+        font-size: .8rem !important;
+        padding: .5rem 1.2rem !important;
+        letter-spacing: .2px !important;
+        transition: all .25s ease !important;
+    }
+    button.em9zgd03:hover,
+    button[class*="em9zgd03"]:hover {
+        color: #fff !important;
+        background: linear-gradient(135deg, #141b30, #1e293b) !important;
+        border-color: rgba(99, 102, 241, .5) !important;
+        box-shadow: 0 4px 18px rgba(99, 102, 241, .15) !important;
+        transform: translateY(-1px) !important;
+    }
+    button.em9zgd03:active,
+    button[class*="em9zgd03"]:active {
+        transform: scale(.97) !important;
+    }
+    </style>''', unsafe_allow_html=True)
+
+
+# ═══════════════════════════════════════════════════════════
 # PAGE ROUTER
 # ═══════════════════════════════════════════════════════════
 if st.session_state.view == "landing":
     render_landing()
+elif st.session_state.view == "demo_generator":
+    render_demo_page()
 else:
     render_dashboard()

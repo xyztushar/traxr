@@ -131,41 +131,69 @@ class _LLMCallResult:
 # ═══════════════════════════════════════════════════════════
 
 def _get_api_key() -> str | None:
-    return os.environ.get("GEMINI_API_KEY", "").strip() or None
+    """Resolve the next available Gemini API key from the pool."""
+    from key_pool import get_next_api_key
+    return get_next_api_key()
 
 
 def is_llm_available() -> bool:
-    """Check if a Gemini API key is configured."""
-    return _get_api_key() is not None
+    """Check if at least one Gemini API key is configured."""
+    from key_pool import get_all_api_keys
+    return len(get_all_api_keys()) > 0
 
 
-def _get_model():
+def _get_model(api_key: str | None = None):
     try:
         import google.generativeai as genai
-        key = _get_api_key()
+        key = api_key or _get_api_key()
         if not key:
             return None
         genai.configure(api_key=key)
-        return genai.GenerativeModel("gemini-2.0-flash")
+        return genai.GenerativeModel("gemini-2.5-flash")
     except Exception:
         return None
 
 
 def _call_gemini(prompt: str, json_mode: bool = True) -> str | None:
-    """Call Gemini with a prompt. Returns raw text or None on failure."""
-    model = _get_model()
-    if model is None:
+    """Call Gemini with automatic key rotation on 429 errors.
+
+    Tries each available API key. If a key hits rate limits, marks it
+    as exhausted and moves to the next key. Returns raw text or None.
+    """
+    from key_pool import get_all_api_keys, mark_key_exhausted
+    import time
+
+    keys = get_all_api_keys()
+    if not keys:
         return None
-    try:
-        import google.generativeai as genai
-        config_kwargs: dict[str, Any] = {"temperature": 0.3}
-        if json_mode:
-            config_kwargs["response_mime_type"] = "application/json"
-        config = genai.GenerationConfig(**config_kwargs)
-        response = model.generate_content(prompt, generation_config=config)
-        return response.text
-    except Exception:
-        return None
+
+    for key in keys:
+        model = _get_model(api_key=key)
+        if model is None:
+            continue
+
+        # Try this key with a single retry (short backoff)
+        for attempt in range(2):
+            try:
+                import google.generativeai as genai
+                config_kwargs: dict[str, Any] = {"temperature": 0.3}
+                if json_mode:
+                    config_kwargs["response_mime_type"] = "application/json"
+                config = genai.GenerationConfig(**config_kwargs)
+                response = model.generate_content(prompt, generation_config=config)
+                return response.text
+            except Exception as exc:
+                exc_str = str(exc)
+                if "429" in exc_str:
+                    if attempt == 0:
+                        time.sleep(5)  # Brief retry before rotating
+                        continue
+                    # This key is exhausted — mark it and try the next
+                    mark_key_exhausted(key)
+                    break
+                return None  # Non-quota error — don't retry
+
+    return None  # All keys exhausted
 
 
 def _parse_json(text: str | None) -> dict | list | None:
@@ -524,7 +552,7 @@ def build_gaps(
     resume_text: str,
     job_description_text: str,
     role_dna: dict[str, Any],
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     """Identify skill and evidence gaps.
 
     Returns a list of dicts (GapItem-compatible) with provenance metadata

@@ -1,10 +1,17 @@
 """
 TRAXR — NLP Pipeline
-Deterministic text extraction, skill detection, semantic matching, and profile signal analysis.
-Pure processing module: no Streamlit, no network calls, no side effects.
+Text extraction, skill detection, semantic matching, and profile signal analysis.
+Pure processing module: no Streamlit, no UI logic.
 
-Public API:
-    extract_pdf_text(uploaded_file) -> tuple[str, str | None]
+Public API (PDF extraction — called directly by app.py for per-stage spinner control):
+    extract_pdf_text_basic(uploaded_file) -> str
+    is_text_low_quality(text: str) -> bool
+    render_pdf_pages_for_ocr(uploaded_file) -> list[bytes]
+    extract_text_with_gemini_from_pages(page_images, api_key) -> str
+    normalize_resume_text(text: str) -> str
+    extract_resume_text(uploaded_file, api_key) -> tuple[str, dict]  (non-UI orchestrator)
+
+Public API (skills & signals — unchanged):
     extract_skills(text: str) -> list[str]
     semantic_match_score(resume_skills: list[str], jd_skills: list[str]) -> float
     extract_profile_signals(resume_text: str) -> dict
@@ -12,8 +19,15 @@ Public API:
 
 from __future__ import annotations
 
+import io
+import logging
 import re
+import unicodedata
 from typing import Any, BinaryIO
+
+import gemini_client
+
+logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -146,116 +160,365 @@ def _normalize(text: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════
-# PUBLIC: PDF EXTRACTION
+# PUBLIC: PDF EXTRACTION PIPELINE
+# These stage functions are called directly by app.py for
+# per-stage st.spinner() control.
 # ═══════════════════════════════════════════════════════════
 
-def extract_pdf_text(uploaded_file: BinaryIO) -> tuple[str, str | None]:
-    """Extract text from an uploaded PDF file using PyMuPDF.
+_MIN_OCR_TEXT = 100         # minimum OCR chars to consider usable
+_LOW_QUALITY_LENGTH = 300   # below this, trigger OCR
+_LOW_QUALITY_ALPHA = 0.45   # alpha ratio below this, trigger OCR
+_LOW_QUALITY_TOKENS = 40    # fewer meaningful tokens, trigger OCR
+_JUNK_RATIO = 0.05          # junk char ratio above this, trigger OCR
+_MAX_OCR_PAGES = 3          # default pages to render for OCR
+_MAX_OCR_PAGES_ABS = 4      # absolute max pages for OCR
+_RENDER_DPI = 200           # OCR rendering DPI
 
-    Returns:
-        (clean_text, None) on success.
-        ("", error_message) on failure — never silently returns empty text.
+_RESUME_SECTION_HEADERS = {
+    "education", "experience", "skills", "projects", "summary",
+    "work", "certifications", "achievements", "objective", "awards",
+    "technical", "publications", "research", "volunteer",
+    "extracurricular", "profile", "about",
+}
+
+
+def extract_pdf_text_basic(uploaded_file: BinaryIO) -> str:
+    """Stage A: Extract text from a PDF using pypdf.
+
+    Resets file pointer before reading. Returns raw extracted text
+    (not yet normalized). Returns empty string on any failure.
     """
+    try:
+        import pypdf
+    except ImportError:
+        logger.warning("pypdf is not installed.")
+        return ""
+
     try:
         uploaded_file.seek(0)
     except Exception:
         pass
 
-    # Read raw bytes
     try:
-        pdf_bytes = uploaded_file.read()
-    except Exception as exc:
-        return ("", f"Could not read the uploaded file: {type(exc).__name__}: {exc}")
-
-    if not pdf_bytes:
-        return ("", "Uploaded file is empty (0 bytes).")
-
-    # Try PyMuPDF first, fall back to pypdf
-    text, err = _extract_with_fitz(pdf_bytes)
-    if text is not None:
-        return _validate_extracted_text(text)
-    # If fitz not available, try pypdf
-    text2, err2 = _extract_with_pypdf(pdf_bytes)
-    if text2 is not None:
-        return _validate_extracted_text(text2)
-    # Return the most specific error
-    return ("", err or err2 or "PDF parsing failed with all available libraries.")
-
-
-def _extract_with_fitz(pdf_bytes: bytes) -> tuple[str | None, str | None]:
-    """Try PyMuPDF extraction. Returns (text, None) or (None, error)."""
-    try:
-        import fitz
-    except ImportError:
-        return (None, "PyMuPDF (fitz) is not installed.")
-
-    try:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    except Exception as exc:
-        return (None, f"PDF could not be opened. File may be corrupted or password-protected. ({type(exc).__name__})")
-
-    if doc.page_count == 0:
-        doc.close()
-        return (None, "PDF has zero pages.")
-
-    text_parts: list[str] = []
-    for page in doc:
+        raw_bytes = uploaded_file.getvalue()
+    except AttributeError:
         try:
-            text_parts.append(page.get_text())
-        except Exception:
-            continue
-    doc.close()
+            uploaded_file.seek(0)
+            raw_bytes = uploaded_file.read()
+        except Exception as exc:
+            logger.warning("Could not read uploaded file: %s", exc)
+            return ""
 
-    clean = _normalize_pdf_text("\n".join(text_parts))
-    return (clean, None)
-
-
-def _extract_with_pypdf(pdf_bytes: bytes) -> tuple[str | None, str | None]:
-    """Fallback: try pypdf extraction."""
-    try:
-        import pypdf
-        import io
-    except ImportError:
-        return (None, "Neither PyMuPDF nor pypdf is installed.")
+    if not raw_bytes:
+        return ""
 
     try:
-        reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+        reader = pypdf.PdfReader(io.BytesIO(raw_bytes))
     except Exception as exc:
-        return (None, f"PDF could not be read. ({type(exc).__name__})")
+        logger.warning("pypdf could not read PDF: %s", exc)
+        return ""
 
     if len(reader.pages) == 0:
-        return (None, "PDF has zero pages.")
+        return ""
 
-    text_parts: list[str] = []
+    page_texts: list[str] = []
     for page in reader.pages:
         try:
-            text_parts.append(page.extract_text() or "")
+            raw = page.extract_text() or ""
+            page_texts.append(raw)
         except Exception:
+            page_texts.append("")
+
+    return "\n\n".join(page_texts)
+
+
+def is_text_low_quality(text: str) -> bool:
+    """Quality gate: returns True if text should trigger OCR fallback.
+
+    Triggers if ANY of these are true:
+    - stripped text is shorter than 300 chars
+    - alpha ratio is below 0.45
+    - fewer than 40 meaningful tokens (len > 1)
+    - high junk/replacement character ratio (> 5%)
+    - no recognizable resume section headers found
+    """
+    stripped = text.strip()
+
+    # Empty or very short
+    if len(stripped) < _LOW_QUALITY_LENGTH:
+        return True
+
+    # Alpha ratio too low (metadata noise, binary junk)
+    alpha_count = sum(1 for c in stripped if c.isalpha())
+    if alpha_count / max(1, len(stripped)) < _LOW_QUALITY_ALPHA:
+        return True
+
+    # Too few meaningful tokens
+    tokens = [w for w in stripped.split() if len(w) > 1]
+    if len(tokens) < _LOW_QUALITY_TOKENS:
+        return True
+
+    # High junk character ratio
+    junk_count = stripped.count("\ufffd") + stripped.count("\uFFFD")
+    if junk_count > len(stripped) * _JUNK_RATIO:
+        return True
+
+    # No resume-like structure
+    lower = stripped.lower()
+    has_section = any(header in lower for header in _RESUME_SECTION_HEADERS)
+    if not has_section:
+        return True
+
+    return False
+
+
+def render_pdf_pages_for_ocr(uploaded_file: BinaryIO) -> list[bytes]:
+    """Render PDF pages to PNG images using pypdfium2.
+
+    Returns list of PNG byte arrays (first 3 pages, max 4).
+    Returns empty list on failure.
+    """
+    try:
+        import pypdfium2 as pdfium
+    except ImportError:
+        logger.warning("pypdfium2 is not installed for PDF rendering.")
+        return []
+
+    try:
+        uploaded_file.seek(0)
+    except Exception:
+        pass
+
+    try:
+        raw_bytes = uploaded_file.getvalue()
+    except AttributeError:
+        try:
+            uploaded_file.seek(0)
+            raw_bytes = uploaded_file.read()
+        except Exception as exc:
+            logger.warning("Could not read uploaded file for rendering: %s", exc)
+            return []
+
+    if not raw_bytes:
+        return []
+
+    try:
+        pdf = pdfium.PdfDocument(raw_bytes)
+    except Exception as exc:
+        logger.warning("pypdfium2 could not open PDF: %s", exc)
+        return []
+
+    images: list[bytes] = []
+    pages_to_render = min(len(pdf), _MAX_OCR_PAGES)
+    scale = _RENDER_DPI / 72  # 200 DPI → ~2.78x
+
+    for i in range(pages_to_render):
+        try:
+            page = pdf[i]
+            bitmap = page.render(scale=scale)
+            pil_image = bitmap.to_pil()
+            buf = io.BytesIO()
+            pil_image.save(buf, format="PNG")
+            images.append(buf.getvalue())
+        except Exception as exc:
+            logger.warning("Failed to render page %d: %s", i + 1, exc)
             continue
 
-    clean = _normalize_pdf_text("\n".join(text_parts))
-    return (clean, None)
+    try:
+        pdf.close()
+    except Exception:
+        pass
+
+    return images
 
 
-def _normalize_pdf_text(raw: str) -> str:
-    """Normalize extracted PDF text: collapse spacing, trim."""
-    text = re.sub(r"[ \t]+", " ", raw)        # collapse horizontal whitespace
-    text = re.sub(r"\n{3,}", "\n\n", text)    # collapse excessive blank lines
+def extract_text_with_gemini_from_pages(
+    page_images: list[bytes], api_key: str
+) -> str:
+    """OCR each page image via Gemini, rotating API keys on 429 errors.
+
+    Returns merged text. Returns empty string if all keys/pages fail.
+    """
+    if not page_images:
+        return ""
+
+    from key_pool import get_all_api_keys, mark_key_exhausted
+
+    # Build ordered key list: provided key first, then others from pool
+    all_keys = get_all_api_keys()
+    ordered_keys = [api_key] if api_key else []
+    for k in all_keys:
+        if k not in ordered_keys:
+            ordered_keys.append(k)
+
+    if not ordered_keys:
+        return ""
+
+    # Track current key/model — rotate on 429
+    current_key_idx = 0
+    model = gemini_client.get_gemini_model(ordered_keys[current_key_idx])
+
+    page_texts: list[str] = []
+    for i, img_bytes in enumerate(page_images):
+        extracted = ""
+        if model is not None:
+            extracted = gemini_client.ocr_page_image(model, img_bytes)
+
+        # If OCR returned empty and we have more keys, try rotating
+        if not extracted or not extracted.strip():
+            rotated = False
+            while current_key_idx < len(ordered_keys) - 1:
+                mark_key_exhausted(ordered_keys[current_key_idx])
+                current_key_idx += 1
+                logger.info("Rotating to API key ...%s for OCR",
+                            ordered_keys[current_key_idx][-6:])
+                model = gemini_client.get_gemini_model(ordered_keys[current_key_idx])
+                if model is not None:
+                    extracted = gemini_client.ocr_page_image(model, img_bytes)
+                    if extracted and extracted.strip():
+                        rotated = True
+                        break
+            if not rotated:
+                logger.info("Gemini OCR page %d: all keys exhausted.", i + 1)
+
+        if extracted and extracted.strip() and extracted.strip() != "[BLANK PAGE]":
+            page_texts.append(extracted.strip())
+            logger.info("Gemini OCR page %d: %d chars.", i + 1, len(extracted))
+        else:
+            logger.info("Gemini OCR page %d: blank or failed.", i + 1)
+
+    return "\n\n".join(page_texts)
+
+
+def normalize_resume_text(text: str) -> str:
+    """Normalize extracted resume text for the analysis pipeline.
+
+    - Unicode NFKC normalization
+    - Collapse 3+ consecutive blank lines to 2
+    - Preserve bullet points, section headings, URLs, emails, metrics
+    - Strip leading/trailing whitespace
+    - Does NOT collapse all whitespace (preserves resume structure)
+    """
+    if not text:
+        return ""
+
+    # Unicode normalization
+    text = unicodedata.normalize("NFKC", text)
+
+    # Collapse 3+ consecutive blank lines to 2
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    # Collapse runs of spaces/tabs on a single line (but preserve newlines)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+
+    # Strip trailing whitespace from each line
+    lines = text.split("\n")
+    lines = [line.rstrip() for line in lines]
+    text = "\n".join(lines)
+
     return text.strip()
 
 
-def _validate_extracted_text(text: str) -> tuple[str, str | None]:
-    """Validate extracted text meets minimum quality threshold."""
-    if not text:
-        return ("", "PDF uploaded, but no text could be extracted. "
-                "The file may be a scanned image. Please upload a "
-                "text-based PDF or paste the resume text.")
+def _compute_quality_score(text: str) -> float:
+    """Compute a simple 0.0–1.0 quality score for extracted text."""
+    if not text.strip():
+        return 0.0
 
-    if len(text) < _MIN_USEFUL_TEXT_LENGTH:
-        return ("", "This PDF appears to be scanned or image-based. "
-                "Please upload a text-based PDF or paste the resume text.")
+    # Length score (40% weight)
+    length_score = min(1.0, len(text.strip()) / 2000)
 
-    return (text, None)
+    # Alpha ratio (30% weight)
+    alpha_count = sum(1 for c in text if c.isalpha())
+    alpha_score = alpha_count / max(1, len(text))
+
+    # Section headers (30% weight)
+    lower = text.lower()
+    header_count = sum(1 for h in _RESUME_SECTION_HEADERS if h in lower)
+    header_score = min(1.0, header_count / 4)
+
+    return round(length_score * 0.4 + alpha_score * 0.3 + header_score * 0.3, 3)
+
+
+def _count_pdf_pages(uploaded_file: BinaryIO) -> int:
+    """Count pages in a PDF using pypdf. Returns 0 on failure."""
+    try:
+        import pypdf
+        uploaded_file.seek(0)
+        raw_bytes = uploaded_file.getvalue() if hasattr(uploaded_file, 'getvalue') else uploaded_file.read()
+        reader = pypdf.PdfReader(io.BytesIO(raw_bytes))
+        return len(reader.pages)
+    except Exception:
+        return 0
+
+
+def extract_resume_text(
+    uploaded_file: BinaryIO, api_key: str | None = None
+) -> tuple[str, dict]:
+    """Non-UI orchestrator: basic extraction → quality gate → OCR fallback → normalize.
+
+    NOT called by app.py's upload flow (app.py calls stage functions directly
+    for per-stage st.spinner() control). Exists for programmatic callers,
+    tests, scripts, and non-Streamlit contexts.
+
+    Returns:
+        (extracted_text, metadata_dict)
+    """
+    # Stage A: basic extraction
+    raw_text = extract_pdf_text_basic(uploaded_file)
+    low_quality = is_text_low_quality(raw_text)
+    page_count = _count_pdf_pages(uploaded_file)
+
+    # Good quality — return directly
+    if not low_quality and raw_text.strip():
+        text = normalize_resume_text(raw_text)
+        return (text, {
+            "method": "pypdf",
+            "used_ocr": False,
+            "pages_processed": page_count,
+            "chars_extracted": len(text),
+            "quality_score": _compute_quality_score(text),
+            "error": None,
+        })
+
+    # Stage B: OCR fallback
+    if low_quality and api_key:
+        uploaded_file.seek(0)
+        page_images = render_pdf_pages_for_ocr(uploaded_file)
+        ocr_text = extract_text_with_gemini_from_pages(page_images, api_key)
+
+        if ocr_text and len(ocr_text.strip()) >= _MIN_OCR_TEXT:
+            text = normalize_resume_text(ocr_text)
+            return (text, {
+                "method": "gemini_ocr",
+                "used_ocr": True,
+                "pages_processed": len(page_images),
+                "chars_extracted": len(text),
+                "quality_score": _compute_quality_score(text),
+                "error": None,
+            })
+
+        # OCR failed but we have partial text
+        if raw_text.strip() and len(raw_text.strip()) >= 50:
+            text = normalize_resume_text(raw_text)
+            return (text, {
+                "method": "pypdf",
+                "used_ocr": True,
+                "pages_processed": page_count,
+                "chars_extracted": len(text),
+                "quality_score": _compute_quality_score(text),
+                "error": "OCR fallback failed. Using partial text extraction.",
+            })
+
+    # Total failure
+    return ("", {
+        "method": "none",
+        "used_ocr": bool(api_key and low_quality),
+        "pages_processed": 0,
+        "chars_extracted": 0,
+        "quality_score": 0.0,
+        "error": "Could not extract readable text from this PDF.",
+    })
+
 
 
 # ═══════════════════════════════════════════════════════════
